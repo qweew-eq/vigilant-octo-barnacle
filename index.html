@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>EEW Monitor System - Broadcast Edition</title>
+    <title>EEW Monitor System - Audio Advanced Edition</title>
     <style>
         :root {
             --bg-dark: #111622;
@@ -292,29 +292,37 @@
         <div class="level-monitor-panel">
             <div class="lvl-row lvl-red"><span>赤 :</span><span id="stat-red">0</span></div>
             <div class="lvl-row lvl-yellow"><span>黄 :</span><span id="stat-yellow">0</span></div>
-            <div class="lvl-row lvl-green"><span>緑 :</span><span id="stat-green">450</span></div>
+            <div class="lvl-row lvl-green"><span>緑 :</span><span id="stat-green">0</span></div>
             <div class="lvl-label-vibe">振動レベル</div>
             <div class="lvl-value-vibe" id="stat-vibe">Lv.0</div>
         </div>
 
         <!-- Dynamic Map Legend Panel -->
         <div class="map-legend">
-            <div style="font-weight: bold; margin-bottom: 6px; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 3px;">震度階級</div>
-            <div class="legend-row"><div class="legend-color" style="background:#8e44ad;"></div>震度 6強 / 6弱</div>
-            <div class="legend-row"><div class="legend-color" style="background:#d63031;"></div>震度 5強 / 5弱</div>
-            <div class="legend-row"><div class="legend-color" style="background:#ff9f43;"></div>震度 4</div>
-            <div class="legend-row"><div class="legend-color" style="background:#fed330;"></div>震度 3</div>
-            <div class="legend-row"><div class="legend-color" style="background:#26de81;"></div>震度 2</div>
-            <div class="legend-row"><div class="legend-color" style="background:#0fedf7;"></div>震度 1</div>
+            <div style="font-weight: bold; margin-bottom: 6px; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 3px;">リアルタイム震度</div>
+            <div class="legend-row"><div class="legend-color" style="background:#ff0000;"></div>強い揺れ (赤)</div>
+            <div class="legend-row"><div class="legend-color" style="background:#ffcc00;"></div>微小な揺れ (黄)</div>
+            <div class="legend-row"><div class="legend-color" style="background:#00ff00;"></div>平常・平穏 (緑)</div>
         </div>
     </div>
 
     <script>
-        // --- MASTER SOUND CONTROLLER ---
+        // --- MASTER AUDIO LOGIC CONFIGURATION ---
         function triggerSound(soundName) {
             console.log(`[AUDIO TRIGGER]: Playing ${soundName}.mp3`);
-            const audio = new Audio(`./${soundName}.mp3`);
-            audio.play().catch(e => console.log("Audio playback blocked until user interacts with page."));
+            const audio = new Audio(`./sounds/${soundName}.mp3`);
+            audio.play().catch(e => {});
+        }
+
+        // Handle specific Shindo audio playback files cleanly
+        function playShindoSound(shindoString) {
+            let normalized = shindoString.trim().replace('弱', '-').replace('強', '+');
+            
+            // Map exact values to assets: shindo1.mp3, shindo5-.mp3, shindo6+.mp3, etc.
+            const validShindos = ['1', '2', '3', '4', '5-', '5+', '6-', '6+', '7'];
+            if (validShindos.includes(normalized)) {
+                triggerSound(`shindo${normalized}`);
+            }
         }
 
         // --- TEXT TO SPEECH ---
@@ -331,100 +339,67 @@
         // --- MAP ENGINE & TELEMETRY ---
         const canvas = document.getElementById('japan-map');
         const ctx = canvas.getContext('2d');
-        let stations = [];
-        let activeWave = null;
+        let niedStations = [];
 
         function resizeCanvas() {
             canvas.width = canvas.parentElement.clientWidth;
             canvas.height = canvas.parentElement.clientHeight;
-            generateNiedStations();
         }
 
-        function generateNiedStations() {
-            stations = [];
-            const totalNodes = 450; 
-            for(let i=0; i<totalNodes; i++) {
-                stations.push({
-                    x: canvas.width * 0.3 + (Math.sin(i * 0.05) * 120) + (i * 0.6),
-                    y: canvas.height * 0.15 + (i * 1.4) - (Math.cos(i*0.1)*30),
-                    currentColor: '#00ff00', // Default green safe state matching panel
-                    state: 'green'
-                });
+        function convertCoords(lat, lng) {
+            const mapLngMin = 122.0; const mapLngMax = 146.0;
+            const mapLatMin = 22.0;  const mapLatMax = 46.0;
+            const x = ((lng - mapLngMin) / (mapLngMax - mapLngMin)) * canvas.width;
+            const y = canvas.height - (((lat - mapLatMin) / (mapLatMax - mapLatMin)) * canvas.height);
+            return { x, y };
+        }
+
+        async function fetchNiedData() {
+            try {
+                const res = await fetch('https://api.wolfx.jp/nied_kyoshin.json');
+                const data = await res.json();
+                
+                if (data && data.items) {
+                    let redCount = 0; let yellowCount = 0; let greenCount = 0;
+
+                    niedStations = data.items.map(item => {
+                        const pos = convertCoords(parseFloat(item.lat), parseFloat(item.lng));
+                        const shindo = parseFloat(item.shindo);
+                        
+                        let color = '#00ff00'; let state = 'green';
+
+                        if (shindo >= 0.5) {
+                            color = '#ff0000'; state = 'red'; redCount++;
+                        } else if (shindo >= -0.5 && shindo < 0.5) {
+                            color = '#ffcc00'; state = 'yellow'; yellowCount++;
+                        } else {
+                            greenCount++;
+                        }
+                        return { x: pos.x, y: pos.y, color: color };
+                    });
+
+                    document.getElementById('stat-red').innerText = redCount;
+                    document.getElementById('stat-yellow').innerText = yellowCount;
+                    document.getElementById('stat-green').innerText = greenCount;
+
+                    let vibeLevel = Math.min(Math.floor((redCount * 5) + (yellowCount * 0.5)), 99);
+                    document.getElementById('stat-vibe').innerText = `Lv.${vibeLevel}`;
+                }
+            } catch (e) {
+                console.error("NIED telemetry poll error", e);
             }
-            updateMetricOverlay();
-        }
-
-        function triggerWavePropagation(epicenterX, epicenterY) {
-            activeWave = { x: epicenterX, y: epicenterY, pRadius: 0, sRadius: 0, maxRadius: Math.max(canvas.width, canvas.height) };
-        }
-
-        function updateMetricOverlay() {
-            let redCount = 0;
-            let yellowCount = 0;
-            let greenCount = 0;
-
-            stations.forEach(node => {
-                if (node.state === 'red') redCount++;
-                else if (node.state === 'yellow') yellowCount++;
-                else greenCount++;
-            });
-
-            document.getElementById('stat-red').innerText = redCount;
-            document.getElementById('stat-yellow').innerText = yellowCount;
-            document.getElementById('stat-green').innerText = greenCount;
-
-            // Calculate aggregate vibration logic based on non-green nodes active
-            let activeWeight = (redCount * 4) + (yellowCount * 1);
-            let targetLvl = Math.min(Math.floor(activeWeight / 4), 99);
-            document.getElementById('stat-vibe').innerText = `Lv.${targetLvl}`;
         }
 
         function drawMapLoop() {
             ctx.clearRect(0, 0, canvas.width, canvas.height);
-            ctx.strokeStyle = 'rgba(255,255,255,0.02)';
-            ctx.lineWidth = 1;
+            ctx.strokeStyle = 'rgba(255,255,255,0.015)'; ctx.lineWidth = 1;
             for(let i=0; i<canvas.width; i+=40) {
                 ctx.beginPath(); ctx.moveTo(i, 0); ctx.lineTo(i, canvas.height); ctx.stroke();
             }
 
-            if(activeWave) {
-                activeWave.pRadius += 3.5; 
-                activeWave.sRadius += 1.8; 
-
-                ctx.beginPath(); ctx.arc(activeWave.x, activeWave.y, activeWave.pRadius, 0, Math.PI*2);
-                ctx.strokeStyle = 'rgba(15, 237, 247, 0.4)'; ctx.stroke();
-
-                ctx.beginPath(); ctx.arc(activeWave.x, activeWave.y, activeWave.sRadius, 0, Math.PI*2);
-                ctx.strokeStyle = 'rgba(232, 27, 35, 0.6)'; ctx.fillStyle = 'rgba(232, 27, 35, 0.04)';
-                ctx.fill(); ctx.stroke();
-
-                stations.forEach(node => {
-                    const dist = Math.hypot(node.x - activeWave.x, node.y - activeWave.y);
-                    if(dist < activeWave.pRadius && dist > activeWave.sRadius) {
-                        node.currentColor = '#ffcc00'; // Yellow alert boundary
-                        node.state = 'yellow';
-                    }
-                    else if(dist < activeWave.sRadius) {
-                        node.currentColor = '#ff0000'; // Critical red boundary
-                        node.state = 'red';
-                    }
-                });
-                
-                updateMetricOverlay();
-
-                if(activeWave.sRadius > activeWave.maxRadius) {
-                    activeWave = null;
-                    // Reset matrix to resting safe profile once wave clears outward
-                    setTimeout(() => {
-                        stations.forEach(n => { n.currentColor = '#00ff00'; n.state = 'green'; });
-                        updateMetricOverlay();
-                    }, 4000);
-                }
-            }
-
-            stations.forEach(node => {
-                ctx.beginPath(); ctx.arc(node.x, node.y, 3, 0, Math.PI*2);
-                ctx.fillStyle = node.currentColor; ctx.fill();
+            niedStations.forEach(node => {
+                ctx.beginPath(); ctx.arc(node.x, node.y, 2.5, 0, Math.PI * 2);
+                ctx.fillStyle = node.color; ctx.fill();
             });
             requestAnimationFrame(drawMapLoop);
         }
@@ -437,9 +412,7 @@
             try {
                 const res = await fetch('https://api.wolfx.jp/jma_eqlist.json');
                 const data = await res.json();
-                if(data && data["1"]) {
-                    updateUI(data["1"], false, false);
-                }
+                if(data && data["1"]) { updateUI(data["1"]); }
                 
                 const container = document.getElementById('history-container');
                 container.innerHTML = "";
@@ -452,10 +425,10 @@
                         container.appendChild(div);
                     }
                 }
-            } catch(e) { console.log("Initial history pull skipped."); }
+            } catch(e) {}
         }
 
-        function updateUI(dataset, isLiveEEW, isP2PReport) {
+        function updateUI(dataset) {
             document.getElementById('eq-location').innerText = dataset.location || dataset.Hypocenter || "情報なし";
             document.getElementById('eq-time').innerText = `${dataset.time || dataset.EventTime || '----/--/-- --:--'} 発表`;
             
@@ -478,7 +451,6 @@
             document.getElementById('main-depth').innerText = dataset.depth || dataset.Depth || "---";
         }
 
-        // --- REAL-TIME WEBSOCKET HANDSHAKES ---
         function connectWebSockets() {
             const wolfx = new WebSocket('wss://ws-api.wolfx.jp/jma_eew');
             
@@ -491,29 +463,30 @@
                 const packet = JSON.parse(e.data);
                 if(packet.type !== "jma_eew") return;
 
+                // Handle Cancelation Packets cleanly
+                if (packet.isCancel) {
+                    triggerSound('cancel');
+                    document.getElementById('alert-header').innerText = "緊急地震速報 (取消されました)";
+                    document.getElementById('alert-header').style.background = '#747d8c';
+                    return;
+                }
+
                 document.getElementById('alert-header').innerText = `緊急地震速報 (#${packet.Serial})`;
                 document.getElementById('alert-header').style.background = 'var(--accent-red)';
                 
-                updateUI(packet, true, false);
+                updateUI(packet);
 
                 const currentShindo = packet.MaxIntensity || "-";
-                const isWarn = packet.isWarn || false;
                 const serial = parseInt(packet.Serial) || 1;
                 const isFinal = packet.isFinal || false;
 
                 if (packet.EventID !== lastIssueId || serial === 1) {
                     lastIssueId = packet.EventID;
                     triggerSound('quake1');
-                    triggerWavePropagation(canvas.width * 0.5, canvas.height * 0.45);
-                    speakAlert(`緊急地震速報。${packet.Hypocenter}で地震が発生。`);
+                    speakAlert(`緊急地震速報。${packet.Hypocenter}で最大震度${currentShindo}の地震が発生。`);
 
-                    if (["3", "4", "5-", "5+", "6-", "6+", "7"].some(s => currentShindo.includes(s))) {
-                        setTimeout(() => triggerSound('quake3'), 800);
-                    }
-
-                    if (isWarn || ["5-", "5+", "6-", "6+", "7"].some(s => currentShindo.includes(s))) {
-                        setTimeout(() => triggerSound('quake5'), 1500);
-                    }
+                    // Play specific intensity sound profile directly 
+                    playShindoSound(currentShindo);
                 } 
                 else if (serial > lastSerial && !isFinal) {
                     triggerSound('update');
@@ -522,11 +495,6 @@
                 if (isFinal) {
                     triggerSound('updatef');
                 }
-
-                if (packet.LPGMInfo) {
-                    triggerSound('lpgm');
-                }
-
                 lastSerial = serial;
             };
 
@@ -538,15 +506,47 @@
             const p2p = new WebSocket('wss://api.p2pquake.net/v2/ws');
             p2p.onmessage = (e) => {
                 const raw = JSON.parse(e.data);
-
                 if (raw.code === 551) {
                     triggerSound('info');
-                    if (raw.earthquake && raw.earthquake.hypocenter) {
-                        triggerSound('infoepi');
-                    }
-                    if (raw.points && raw.points.length > 0) {
-                        setTimeout(() => triggerSound('finalinfo'), 2000);
+                }
+                if (raw.code === 552) {
+                    const banner = document.getElementById('tsunami-alert');
+                    if (raw.cancelled) {
+                        banner.innerText = "津波警報・注意報は解除されました";
+                        banner.style.background = "#2f3542";
+                        triggerSound('tsunami_cancel'); 
+                    } else {
+                        banner.style.background = 'var(--accent-red)';
+                        const hasMajor = raw.areas && raw.areas.some(a => a.grade === "MajorWarning");
+                        if (hasMajor) {
+                            banner.innerText = "大津波警報 発令中";
+                            triggerSound('tsunami_major'); 
+                        } else {
+                            banner.innerText = "津波警報・注意報 発令中";
+                            triggerSound('tsunami_warn');  
+                        }
                     }
                 }
+            };
+        }
 
- 
+        function runClock() {
+            setInterval(() => {
+                const d = new Date();
+                const pad = (n) => String(n).padStart(2, '0');
+                document.getElementById('live-clock').innerText = 
+                    `${d.getFullYear()}/${pad(d.getMonth()+1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+            }, 1000);
+        }
+
+        window.addEventListener('resize', resizeCanvas);
+        window.addEventListener('DOMContentLoaded', () => {
+            resizeCanvas();
+            bootLatestData();
+            connectWebSockets();
+            runClock();
+            drawMapLoop();
+            
+            fetchNiedData();
+            setInterval(fetchNiedData, 2000); // 2-second real-time intervals
+  
